@@ -18,9 +18,11 @@ extern crate smith_config;
 extern crate smith_trove;
 extern crate tokio_core;
 
-mod service;
+mod runner;
 mod errors;
 mod utils;
+mod endpoints;
+mod web;
 
-pub use service::*;
+pub use runner::*;
 pub use errors::*;

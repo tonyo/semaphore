@@ -7,11 +7,11 @@ use futures::sync::oneshot;
 use hyper::{Error as HyperError, StatusCode};
 use hyper::header::{ContentLength, ContentType};
 use hyper::server::{Http, Request, Response, Service};
-use regex::Regex;
 use failure::ResultExt;
 
 use errors::{Error, ErrorKind};
 use utils::make_error_response;
+use endpoints;
 
 use smith_config::Config;
 use smith_aorta::ApiErrorResponse;
@@ -20,11 +20,19 @@ use smith_common::ProjectId;
 
 static TEXT: &'static str = "Doing absolutely nothing so far!";
 
-struct ProxyService {
+struct RootService {
     ctx: Arc<TroveContext>,
 }
 
-impl Service for ProxyService {
+lazy_static! {
+    static ref ROUTER: Router = {
+        let mut router = Router::new();
+        router.add_route("/api/0/healthcheck/", endpoints::healthcheck);
+        router
+    };
+}
+
+impl Service for RootService {
     type Request = Request;
     type Response = Response;
     type Error = HyperError;
@@ -32,16 +40,6 @@ impl Service for ProxyService {
 
     fn call(&self, req: Request) -> Self::Future {
         panic::catch_unwind(panic::AssertUnwindSafe(|| -> Self::Future {
-            lazy_static! {
-                static ref SUBMIT_URL: Regex = Regex::new(r"^/api/(\d+)/store/$").unwrap();
-            }
-
-            if let Some(m) = SUBMIT_URL.captures(req.path()) {
-                if let Ok(project_id) = m[1].parse::<ProjectId>() {
-                    println!("{}", project_id);
-                }
-            }
-
             Box::new(future::ok(
                 Response::new()
                     .with_header(ContentLength(TEXT.len() as u64))
@@ -85,7 +83,7 @@ pub fn run(config: &Config, shutdown_rx: oneshot::Receiver<()>) -> Result<(), Er
             let ctx_inner = ctx.clone();
             let server = Http::new()
                 .bind(&config.listen_addr(), move || {
-                    Ok(ProxyService {
+                    Ok(RootService {
                         ctx: ctx_inner.lock().as_ref().unwrap().clone(),
                     })
                 })
