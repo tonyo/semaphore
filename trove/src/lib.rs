@@ -19,7 +19,9 @@ extern crate serde_derive;
 extern crate serde_json;
 extern crate smith_aorta;
 extern crate smith_common;
+extern crate tokio;
 extern crate tokio_core;
+extern crate tokio_timer;
 
 mod auth;
 mod heartbeat;

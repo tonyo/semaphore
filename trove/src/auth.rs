@@ -1,9 +1,10 @@
 use std::sync::Arc;
 
 use futures::Future;
-use tokio_core::reactor::Timeout;
+use tokio;
+use tokio_timer::Timer;
 
-use types::TroveContext;
+use types::TroveState;
 
 use smith_aorta::{RegisterChallenge, RegisterRequest};
 
@@ -31,80 +32,78 @@ impl AuthState {
 #[fail(display = "could not authenticate")]
 pub struct AuthError;
 
-pub(crate) fn spawn_authenticator(ctx: Arc<TroveContext>) {
-    let state = ctx.state();
+pub(crate) fn spawn_authenticator(state: Arc<TroveState>) {
     state.set_auth_state(AuthState::Unknown);
     debug!("starting authenticator");
-    register_with_upstream(ctx);
+    register_with_upstream(state);
 }
 
-fn register_with_upstream(ctx: Arc<TroveContext>) {
-    let config = &ctx.state().config();
+fn register_with_upstream(state: Arc<TroveState>) {
+    let config = &state.config();
 
     info!(
         "registering with upstream (upstream = {})",
         &config.upstream
     );
-    let state = ctx.state();
 
     state.set_auth_state(AuthState::RegisterRequestChallenge);
 
-    let inner_ctx_success = ctx.clone();
-    let inner_ctx_failure = ctx.clone();
+    let inner_state_success = state.clone();
+    let inner_state_failure = state.clone();
     let reg_req = RegisterRequest::new(config.relay_id(), config.public_key());
-    ctx.handle().spawn(
-        ctx.aorta_request(&reg_req)
+    tokio::spawn(
+        state
+            .aorta_request(&reg_req)
             .and_then(|challenge| {
                 info!("got register challenge (token = {})", challenge.token());
-                send_register_challenge_response(inner_ctx_success, challenge);
+                send_register_challenge_response(inner_state_success, challenge);
                 Ok(())
             })
             .or_else(|err| {
                 // XXX: do not schedule retries for fatal errors
                 error!("authentication encountered error: {}", &err);
-                schedule_auth_retry(inner_ctx_failure);
+                schedule_auth_retry(inner_state_failure);
                 Err(())
             }),
     );
 }
 
-fn send_register_challenge_response(ctx: Arc<TroveContext>, challenge: RegisterChallenge) {
+fn send_register_challenge_response(state: Arc<TroveState>, challenge: RegisterChallenge) {
     info!("sending register challenge response");
-    let state = ctx.state();
 
     state.set_auth_state(AuthState::RegisterChallengeResponse);
 
-    let inner_ctx_success = ctx.clone();
-    let inner_ctx_failure = ctx.clone();
+    let inner_state_success = state.clone();
+    let inner_state_failure = state.clone();
     let challenge_resp_req = challenge.create_response();
-    ctx.handle().spawn(
-        ctx.aorta_request(&challenge_resp_req)
+    tokio::spawn(
+        state
+            .aorta_request(&challenge_resp_req)
             .and_then(move |_| {
                 info!("relay successfully registered with upstream");
-                let state = inner_ctx_success.state();
-                state.set_auth_state(AuthState::Registered);
+                inner_state_success.set_auth_state(AuthState::Registered);
                 Ok(())
             })
             .or_else(|err| {
                 // XXX: do not schedule retries for fatal errors
                 error!("failed to register relay with upstream: {}", &err);
-                schedule_auth_retry(inner_ctx_failure);
+                schedule_auth_retry(inner_state_failure);
                 Err(())
             }),
     );
 }
 
-fn schedule_auth_retry(ctx: Arc<TroveContext>) {
+fn schedule_auth_retry(state: Arc<TroveState>) {
     info!("scheduling authentication retry");
-    let state = ctx.state();
-    let config = &ctx.state().config();
+    let config = &state.config();
     state.set_auth_state(AuthState::Error);
-    let inner_ctx = ctx.clone();
-    ctx.handle().spawn(
-        Timeout::new(config.auth_retry_interval.to_std().unwrap(), &ctx.handle())
-            .unwrap()
+    let timer = Timer::default();
+    let inner_state = state.clone();
+    tokio::spawn(
+        timer
+            .sleep(config.auth_retry_interval.to_std().unwrap())
             .and_then(|_| {
-                register_with_upstream(inner_ctx);
+                register_with_upstream(inner_state);
                 Ok(())
             })
             .or_else(|_| -> Result<_, _> {

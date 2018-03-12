@@ -8,7 +8,7 @@ use serde::de::DeserializeOwned;
 /// For well known types this can automatically define the API request to issue.
 pub trait ApiRequest: Serialize {
     /// The response type.
-    type Response: DeserializeOwned + 'static;
+    type Response: DeserializeOwned + Send + 'static;
 
     /// Returns the target URL and method.
     fn get_aorta_request_target<'a>(&'a self) -> (Method, Cow<'a, str>);

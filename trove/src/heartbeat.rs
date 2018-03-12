@@ -1,25 +1,28 @@
 use std::sync::Arc;
 
 use futures::Future;
-use tokio_core::reactor::Timeout;
+use tokio;
+use tokio::executor::current_thread;
+use tokio_timer::Timer;
 
-use types::TroveContext;
+use types::TroveState;
 
 use smith_aorta::{HeartbeatResponse, QueryStatus};
 
-pub(crate) fn spawn_heartbeat(ctx: Arc<TroveContext>) {
+pub(crate) fn spawn_heartbeat(state: Arc<TroveState>) {
     info!("starting heartbeat service");
-    schedule_heartbeat(ctx);
+    schedule_heartbeat(state);
 }
 
-fn schedule_heartbeat(ctx: Arc<TroveContext>) {
-    let inner_ctx = ctx.clone();
-    let config = &ctx.state().config();
-    ctx.handle().spawn(
-        Timeout::new(config.heartbeat_interval.to_std().unwrap(), &ctx.handle())
-            .unwrap()
+fn schedule_heartbeat(state: Arc<TroveState>) {
+    let inner_state = state.clone();
+    let config = &state.config();
+    let timer = Timer::default();
+    tokio::spawn(
+        timer
+            .sleep(config.heartbeat_interval.to_std().unwrap())
             .and_then(|_| {
-                perform_heartbeat(inner_ctx);
+                perform_heartbeat(inner_state);
                 Ok(())
             })
             .or_else(|_| -> Result<_, _> {
@@ -28,9 +31,7 @@ fn schedule_heartbeat(ctx: Arc<TroveContext>) {
     );
 }
 
-fn perform_heartbeat(ctx: Arc<TroveContext>) {
-    let state = ctx.state();
-
+fn perform_heartbeat(state: Arc<TroveState>) {
     // if we encounter a non authenticated state we shut down.  The authenticator
     // code will respawn us.
     if !state.auth_state().is_authenticated() {
@@ -39,26 +40,26 @@ fn perform_heartbeat(ctx: Arc<TroveContext>) {
     }
 
     let hb_req = state.query_manager().next_heartbeat_request();
-    let inner_ctx_success = ctx.clone();
-    let inner_ctx_failure = ctx.clone();
+    let inner_state_success = state.clone();
+    let inner_state_failure = state.clone();
 
-    ctx.handle().spawn(
-        ctx.aorta_request(&hb_req)
+    current_thread::spawn(
+        state
+            .aorta_request(&hb_req)
             .and_then(move |response| {
-                handle_heartbeat_response(inner_ctx_success.clone(), response);
-                schedule_heartbeat(inner_ctx_success);
+                handle_heartbeat_response(inner_state_success.clone(), response);
+                schedule_heartbeat(inner_state_success);
                 Ok(())
             })
             .or_else(|err| {
                 error!("heartbeat failed: {}", &err);
-                schedule_heartbeat(inner_ctx_failure);
+                schedule_heartbeat(inner_state_failure);
                 Err(())
             }),
     );
 }
 
-fn handle_heartbeat_response(ctx: Arc<TroveContext>, response: HeartbeatResponse) {
-    let state = ctx.state();
+fn handle_heartbeat_response(state: Arc<TroveState>, response: HeartbeatResponse) {
     let query_manager = state.query_manager();
     for (query_id, result) in response.query_results.into_iter() {
         if result.status == QueryStatus::Pending {

@@ -1,3 +1,5 @@
 mod healthcheck;
+mod not_found;
 
-pub use healthcheck::*;
+pub use self::healthcheck::*;
+pub use self::not_found::*;

@@ -11,19 +11,21 @@ use failure::ResultExt;
 
 use errors::{Error, ErrorKind};
 use utils::make_error_response;
+use web::WebContext;
 use endpoints;
 
 use smith_config::Config;
 use smith_aorta::ApiErrorResponse;
-use smith_trove::{Trove, TroveContext};
+use smith_trove::{Trove, TroveState};
 use smith_common::ProjectId;
 
 static TEXT: &'static str = "Doing absolutely nothing so far!";
 
 struct RootService {
-    ctx: Arc<TroveContext>,
+    state: Arc<TroveState>,
 }
 
+/*
 lazy_static! {
     static ref ROUTER: Router = {
         let mut router = Router::new();
@@ -31,6 +33,7 @@ lazy_static! {
         router
     };
 }
+*/
 
 impl Service for RootService {
     type Request = Request;
@@ -40,12 +43,18 @@ impl Service for RootService {
 
     fn call(&self, req: Request) -> Self::Future {
         panic::catch_unwind(panic::AssertUnwindSafe(|| -> Self::Future {
-            Box::new(future::ok(
-                Response::new()
-                    .with_header(ContentLength(TEXT.len() as u64))
-                    .with_header(ContentType::plaintext())
-                    .with_body(TEXT),
-            ))
+            let web_ctx = WebContext::new(req, self.state.clone());
+            let future = if web_ctx.request().path() == "/api/0/healthcheck/" {
+                endpoints::healthcheck(&web_ctx)
+            } else {
+                endpoints::not_found(&web_ctx)
+            };
+            Box::new(future.map(|x| x.into_hyper_response()).or_else(|err| {
+                make_error_response(
+                    StatusCode::InternalServerError,
+                    ApiErrorResponse::with_detail("cannot convert errors yet"),
+                )
+            }))
         })).unwrap_or_else(|_| {
             make_error_response(
                 StatusCode::InternalServerError,
@@ -74,22 +83,14 @@ pub fn run(config: &Config, shutdown_rx: oneshot::Receiver<()>) -> Result<(), Er
         let trove = trove.clone();
         let shutdown_rx = shutdown_rx.clone();
         if panic::catch_unwind(panic::AssertUnwindSafe(|| -> Result<(), Error> {
-            // we need to do a slightly shitty dance here to get the handle
-            // from the server so we can create a trove context with the same
-            // handle as we have on the server process.  It might also make
-            // sense to actually spawn a thread here with a separate core but
-            // for now we can just share it.
-            let ctx = Arc::new(Mutex::new(None::<Arc<TroveContext>>));
-            let ctx_inner = ctx.clone();
+            let trove = trove.clone();
             let server = Http::new()
                 .bind(&config.listen_addr(), move || {
                     Ok(RootService {
-                        ctx: ctx_inner.lock().as_ref().unwrap().clone(),
+                        state: trove.state(),
                     })
                 })
                 .context(ErrorKind::BindFailed)?;
-            *ctx.lock() = Some(trove.new_context(server.handle()));
-
             server
                 .run_until(shutdown_rx.map(|_| ()).map_err(|_| ()))
                 .context(ErrorKind::ListenFailed)?;

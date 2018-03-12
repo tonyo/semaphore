@@ -16,7 +16,6 @@ extern crate serde_json;
 #[macro_use]
 extern crate smith_common;
 extern crate sodiumoxide;
-extern crate tokio_core;
 extern crate url;
 extern crate uuid;
 

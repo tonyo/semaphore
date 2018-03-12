@@ -130,6 +130,8 @@ pub struct RegisterChallenge {
     token: String,
 }
 
+unsafe impl Send for RegisterChallenge {}
+
 /// Represents a response to a register challenge
 #[derive(Serialize, Deserialize, Debug)]
 pub struct RegisterResponse {
@@ -142,6 +144,8 @@ pub struct RegisterResponse {
 pub struct Registration {
     relay_id: RelayId,
 }
+
+unsafe impl Send for Registration {}
 
 impl ApiRequest for RegisterResponse {
     type Response = Registration;
