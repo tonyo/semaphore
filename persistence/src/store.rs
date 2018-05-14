@@ -1,6 +1,7 @@
 use std::sync::Arc;
 
-use rocksdb::{ColumnFamily, ColumnFamilyDescriptor, DB as RocksDb, Error as RocksDbError, Options};
+use chrono::{DateTime, Duration, Utc};
+use rocksdb::{ColumnFamilyDescriptor, DB as RocksDb, Error as RocksDbError, Options};
 use serde::de::DeserializeOwned;
 use serde::ser::Serialize;
 use serde_cbor;
@@ -16,6 +17,9 @@ pub enum StoreError {
     /// Indicates that writing to the db failed.
     #[fail(display = "cannot write to database")]
     WriteError(#[cause] RocksDbError),
+    /// Raised if repairs failed
+    #[fail(display = "could not repair storage")]
+    RepairFailed(#[cause] RocksDbError),
     /// Raised on deserialization errors.
     #[fail(display = "cannot deseralize value from database")]
     DeserializeError(#[cause] serde_cbor::error::Error),
@@ -25,7 +29,6 @@ pub enum StoreError {
 pub struct Store {
     db: RocksDb,
     config: Arc<Config>,
-    main_cf: ColumnFamily,
 }
 
 impl Store {
@@ -34,34 +37,52 @@ impl Store {
         let path = config.path().join("storage");
         let opts = get_database_options();
         let cfs = vec![
-            ColumnFamilyDescriptor::new("main", get_column_family_options()),
+            ColumnFamilyDescriptor::new("cache", get_column_family_options()),
+            ColumnFamilyDescriptor::new("projects", get_column_family_options()),
         ];
         let db = RocksDb::open_cf_descriptors(&opts, &path, cfs).map_err(StoreError::CannotOpen)?;
-        let main_cf = db.cf_handle("main")
-            .expect("could not get main column family");
-        Ok(Store {
-            db: db,
-            config,
-            main_cf,
-        })
+        Ok(Store { db: db, config })
     }
 
-    /// Stores a key in the main k/v part of the storage.
-    pub fn set<S: Serialize>(&self, key: &str, value: &S) -> Result<(), StoreError> {
+    /// Attempts to repair the store.
+    pub fn repair(config: Arc<Config>) -> Result<(), StoreError> {
+        let path = config.path().join("storage");
+        RocksDb::repair(get_database_options(), &path).map_err(StoreError::RepairFailed)
+    }
+
+    /// Caches a certain value.
+    pub fn cache_set<S: Serialize>(
+        &self,
+        key: &str,
+        value: &S,
+        ttl: Option<Duration>,
+    ) -> Result<(), StoreError> {
+        #[derive(Serialize)]
+        pub struct CacheItem<'a, T: Serialize + 'a>(&'a T, Option<DateTime<Utc>>);
+        let main_cf = self.db.cf_handle("main").unwrap();
         self.db
             .put_cf(
-                self.main_cf,
+                main_cf,
                 key.as_bytes(),
-                &serde_cbor::to_vec(value).unwrap(),
+                &serde_cbor::to_vec(&CacheItem(value, ttl.map(|x| Utc::now() + x))).unwrap(),
             )
             .map_err(StoreError::WriteError)
     }
 
-    /// Looks up a key expecting a certain type.
-    pub fn get<D: DeserializeOwned>(&self, key: &str) -> Result<Option<D>, StoreError> {
-        match self.db.get_cf(self.main_cf, key.as_bytes()) {
+    /// Looks up a value in the cache.
+    pub fn cache_get<D: DeserializeOwned>(&self, key: &str) -> Result<Option<D>, StoreError> {
+        #[derive(Deserialize)]
+        pub struct CacheItem<T>(T, Option<DateTime<Utc>>);
+        let main_cf = self.db.cf_handle("main").unwrap();
+        match self.db.get_cf(main_cf, key.as_bytes()) {
             Ok(Some(value)) => {
-                Ok(Some(serde_cbor::from_slice(&value).map_err(StoreError::DeserializeError)?))
+                let item: CacheItem<D> =
+                    serde_cbor::from_slice(&value).map_err(StoreError::DeserializeError)?;
+                match item.1 {
+                    None => Ok(Some(item.0)),
+                    Some(ts) if ts > Utc::now() => Ok(Some(item.0)),
+                    _ => Ok(None),
+                }
             }
             Ok(None) => Ok(None),
             Err(err) => Err(StoreError::WriteError(err)),

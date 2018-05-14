@@ -173,4 +173,9 @@ pub fn make_app() -> App<'static, 'static> {
                         ),
                 ),
         )
+        .subcommand(
+            App::new("db")
+                .about("Manage the persistence subsystem.")
+                .subcommand(App::new("repair").help("Attempts to repair the stored data.")),
+        )
 }

@@ -10,7 +10,7 @@ build:
 .PHONY: build
 
 releasebuild:
-	cargo build --release --locked
+	CARGO_INCREMENTAL=0 cargo build --release --locked
 .PHONY: releasebuild
 
 dockerbuild:

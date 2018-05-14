@@ -1,6 +1,7 @@
 use std::env;
 use std::io;
 use std::path::{Path, PathBuf};
+use std::sync::Arc;
 
 use clap::{ArgMatches, Shell};
 use dialoguer::{Confirmation, Select};
@@ -8,6 +9,7 @@ use failure::{err_msg, Error};
 use uuid::Uuid;
 
 use semaphore_config::{Config, Credentials, MinimalConfig};
+use semaphore_persistence::Store;
 use semaphore_server;
 
 use cliapp::make_app;
@@ -38,6 +40,12 @@ pub fn execute() -> Result<(), Error> {
         manage_credentials(config, &matches)
     } else if let Some(matches) = matches.subcommand_matches("run") {
         run(config, &matches)
+    } else if let Some(matches) = matches.subcommand_matches("db") {
+        if let Some(..) = matches.subcommand_matches("repair") {
+            Store::repair(Arc::new(config))?;
+            println!("Repair finished.");
+        }
+        Ok(())
     } else {
         unreachable!();
     }

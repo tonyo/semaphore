@@ -12,6 +12,7 @@ extern crate uuid;
 
 extern crate semaphore_common;
 extern crate semaphore_config;
+extern crate semaphore_persistence;
 extern crate semaphore_server;
 
 mod cli;
