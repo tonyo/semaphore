@@ -1,0 +1,20 @@
+[package]
+authors = ["Sentry <hello@sentry.io>"]
+description = "Persistence layer for the relay"
+documentation = "https://docs.rs/semaphore-persistence"
+homepage = "https://github.com/getsentry/semaphore"
+license = "MIT"
+name = "semaphore-persistence"
+repository = "https://github.com/getsentry/semaphore"
+version = "0.1.0"
+
+[dependencies]
+failure = "0.1.1"
+failure_derive = "0.1.1"
+rocksdb = "0.10.0"
+serde = "1.0.55"
+serde_cbor = "0.8.2"
+
+[dependencies.semaphore-config]
+path = "../config"
+version = "0.1.0"

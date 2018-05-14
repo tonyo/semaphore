@@ -51,4 +51,8 @@ version = "0.1.0"
 path = "trove"
 version = "0.1.0"
 
+[dependencies.semaphore-persistence]
+path = "persistence"
+version = "0.1.0"
+
 [workspace]
