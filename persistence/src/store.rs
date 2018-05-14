@@ -18,6 +18,9 @@ pub enum StoreError {
     /// Indicates that writing to the db failed.
     #[fail(display = "cannot write to database")]
     WriteError(#[cause] RocksDbError),
+    /// Indicates that reading from the db failed.
+    #[fail(display = "cannot read from database")]
+    ReadError(#[cause] RocksDbError),
     /// Raised if repairs failed
     #[fail(display = "could not repair storage")]
     RepairFailed(#[cause] RocksDbError),
@@ -34,7 +37,7 @@ pub struct Store {
 
 #[derive(Debug, PartialEq)]
 enum FamilyType {
-    Persistent,
+    Queue,
     Cache,
 }
 
@@ -45,13 +48,10 @@ impl Store {
         let opts = get_database_options();
         let cfs = vec![
             ColumnFamilyDescriptor::new("cache", get_column_family_options(FamilyType::Cache)),
-            ColumnFamilyDescriptor::new(
-                "projects",
-                get_column_family_options(FamilyType::Persistent),
-            ),
+            ColumnFamilyDescriptor::new("queue", get_column_family_options(FamilyType::Queue)),
         ];
         let db = RocksDb::open_cf_descriptors(&opts, &path, cfs).map_err(StoreError::CannotOpen)?;
-        Ok(Store { db: db, config })
+        Ok(Store { db, config })
     }
 
     /// Attempts to repair the store.
@@ -69,13 +69,19 @@ impl Store {
     ) -> Result<(), StoreError> {
         #[derive(Serialize)]
         pub struct CacheItem<'a, T: Serialize + 'a>(Option<DateTime<Utc>>, &'a T);
-        let main_cf = self.db.cf_handle("cache").unwrap();
         self.db
             .put_cf(
-                main_cf,
+                self.db.cf_handle("cache").unwrap(),
                 key.as_bytes(),
                 &serde_cbor::to_vec(&CacheItem(ttl.map(|x| Utc::now() + x), value)).unwrap(),
             )
+            .map_err(StoreError::WriteError)
+    }
+
+    /// Remove a key from the cache.
+    pub fn cache_remove<S: Serialize>(&self, key: &str) -> Result<(), StoreError> {
+        self.db
+            .delete_cf(self.db.cf_handle("cache").unwrap(), key.as_bytes())
             .map_err(StoreError::WriteError)
     }
 
@@ -83,8 +89,9 @@ impl Store {
     pub fn cache_get<D: DeserializeOwned>(&self, key: &str) -> Result<Option<D>, StoreError> {
         #[derive(Deserialize)]
         pub struct CacheItem<T>(Option<DateTime<Utc>>, T);
-        let main_cf = self.db.cf_handle("cache").unwrap();
-        match self.db.get_cf(main_cf, key.as_bytes()) {
+        match self.db
+            .get_cf(self.db.cf_handle("cache").unwrap(), key.as_bytes())
+        {
             Ok(Some(value)) => {
                 let item: CacheItem<D> =
                     serde_cbor::from_slice(&value).map_err(StoreError::DeserializeError)?;
@@ -95,8 +102,42 @@ impl Store {
                 }
             }
             Ok(None) => Ok(None),
-            Err(err) => Err(StoreError::WriteError(err)),
+            Err(err) => Err(StoreError::ReadError(err)),
         }
+    }
+
+    /// Looks up a value in the cache pruning invalid items.
+    ///
+    /// This is similar to `cache_get` but in case the value coming back from the cache
+    /// does not correspond go the given format the value is dropped and `None` is
+    /// returned instead of producing an error.
+    pub fn cache_get_safe<D: DeserializeOwned>(&self, key: &str) -> Result<Option<D>, StoreError> {
+        self.cache_get(key).or_else(|err| match err {
+            StoreError::DeserializeError(..) => {
+                self.cache_remove(key).ok();
+                Ok(None)
+            }
+            err => Err(err),
+        })
+    }
+
+    /// Pushes an item into a certain queue.
+    pub fn queue_push<S: Serialize>(&self, queue_id: u64, item: &S) -> Result<(), StoreError> {
+        panic!("queue push not implemented");
+    }
+
+    /// Pops an item from the queue.
+    ///
+    /// If the queue is empty nothing is returned.
+    pub fn queue_pop<D: DeserializeOwned>(&self, queue_id: u64) -> Result<Option<D>, StoreError> {
+        panic!("queue pop not implemented");
+    }
+
+    /// Discards all items on a queue.
+    ///
+    /// This effectively deletes a queue.
+    pub fn queue_discard(&self, queue_id: u64) -> Result<(), StoreError> {
+        panic!("queue discard not implemented");
     }
 }
 
