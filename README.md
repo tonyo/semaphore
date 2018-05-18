@@ -94,3 +94,4 @@ Use the `./scripts/bump-version.sh` script to bump versions:
     $ git push origin master NEW_VERSION
 
 Do not forget to update `CHANGELOG.md`, the versioning script will remind you to do it.
+
